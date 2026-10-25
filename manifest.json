@@ -1,0 +1,26 @@
+{
+  "id": "idea-08-chrono-hands-echo",
+  "name": "CHRONO-HANDS: ECHO CO-OP",
+  "tagline": "Seated hands-first 4D time-loop puzzle: pass quantum cores and unlock clockwork vaults with the holographic echoes of your own hands and AI partner AION-3.",
+  "track": "Gaming",
+  "division": "New Experience",
+  "version": "1.0.0",
+  "port": 4108,
+  "httpsPort": 4408,
+  "specialAwardsTargeted": [
+    "Boldest Original Concept",
+    "Best First Five Minutes",
+    "Best Agentic Interaction",
+    "Best Social & Multiplayer Experience",
+    "Best Accessibility Forward Experience",
+    "Best Reason to Come Back"
+  ],
+  "ergonomics": {
+    "handsFirst": true,
+    "seatedAirplaneSeatRadiusMeters": 0.52,
+    "opticalComfortConeDeg": 40,
+    "oneHandedTemporalEmpowerment": true,
+    "defaultUiMode": "BIMANUAL_PIE_MENU",
+    "defaultPanelsCollapsed": true
+  }
+}

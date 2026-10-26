@@ -1527,7 +1527,7 @@
     var AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return null;
     if (!audioCtx) {
-      audioCtx = new AudioContextClass();
+      audioCtx = window.__earlyAudioCtx || new AudioContextClass();
 
       // Master Dynamics Compressor (`DynamicsCompressorNode` — glues mix & prevents clipping)
       masterCompressor = audioCtx.createDynamicsCompressor();
@@ -1616,112 +1616,24 @@
   var bgmFallbackEl = null;
 
   function stopHtml5FallbackBgm() {
+    if (!bgmFallbackEl) bgmFallbackEl = document.getElementById('bgm-autoplay-el');
     if (!bgmFallbackEl) return;
     try {
-      bgmFallbackEl.volume = 0.0;
-      if (!bgmFallbackEl.paused) bgmFallbackEl.pause();
+      if (audioMuted) {
+        bgmFallbackEl.volume = 0.0;
+        if (!bgmFallbackEl.paused) bgmFallbackEl.pause();
+      }
     } catch (_) {}
   }
 
-  // Synthesize an in-memory 16-bit PCM WAV of the Acoustic Chamber Trio for HTML5 <audio autoplay> on initial page load!
-  // If WebAudio's AudioContext starts suspended before a user click, HTML5 <audio autoplay> plays immediately via Chromium MEI
-  // and hands off seamlessly to AudioContext the millisecond AudioContext enters 'running' state (zero overlap!).
   function startImmediateHtml5AudioAutoplay() {
-    if (audioMuted || bgmFallbackEl) return;
+    if (!bgmFallbackEl) bgmFallbackEl = document.getElementById('bgm-autoplay-el');
+    if (audioMuted || !bgmFallbackEl) return;
     try {
-      var sr = 22050;
-      var stepDur = 0.285;
-      var totalSteps = 32;
-      var totalSec = totalSteps * stepDur;
-      var numSamples = Math.floor(sr * totalSec);
-      var left = new Float32Array(numSamples);
-      var right = new Float32Array(numSamples);
-
-      function addAcousticNoteToPcm(startSec, freqHz, durSec, amp, pan, modeRatio, modeAmp, modeDur) {
-        var s0 = Math.max(0, Math.floor(startSec * sr));
-        var len = Math.floor(durSec * sr);
-        var lGain = Math.cos(((pan + 1) * 0.25) * Math.PI);
-        var rGain = Math.sin(((pan + 1) * 0.25) * Math.PI);
-        var twoPiF = 2.0 * Math.PI * freqHz / sr;
-        var twoPiM = 2.0 * Math.PI * (freqHz * modeRatio) / sr;
-        for (var i = 0; i < len; i++) {
-          var idx = (s0 + i) % numSamples;
-          var t = i / sr;
-          var att = t < 0.012 ? t / 0.012 : 1.0;
-          var env1 = att * Math.exp(-t / (durSec * 0.34));
-          var env2 = att * Math.exp(-t / modeDur);
-          var sample = (Math.sin(i * twoPiF) * env1 + Math.sin(i * twoPiM) * modeAmp * env2) * amp;
-          left[idx] += sample * lGain;
-          right[idx] += sample * rGain;
-        }
-      }
-
-      for (var st = 0; st < totalSteps; st++) {
-        var barIdx = Math.floor(st / 8) % CHAMBER_CHORDS.length;
-        var barStep = st % 8;
-        var tStep = st * stepDur + (st % 2 === 1 ? 0.018 : 0.0);
-
-        var bFreq = CHAMBER_BASS_STEPS[st];
-        if (bFreq > 0) {
-          addAcousticNoteToPcm(tStep, bFreq, stepDur * 2.4, 0.26, -0.14, 2.0, 0.65, stepDur * 0.85);
-        }
-        var chNotes = CHAMBER_CHORDS[barIdx];
-        if (barStep === 0 || barStep === 3) {
-          var cDur = barStep === 0 ? stepDur * 4.2 : stepDur * 2.8;
-          var cAmp = barStep === 0 ? 0.12 : 0.095;
-          for (var c = 0; c < chNotes.length; c++) {
-            addAcousticNoteToPcm(tStep + c * 0.007, chNotes[c], cDur, cAmp, (c - 1.5) * 0.20, 2.0, 0.24, cDur * 0.28);
-          }
-        }
-        var mFreq = CHAMBER_MELODY_STEPS[st];
-        if (mFreq > 0) {
-          addAcousticNoteToPcm(tStep, mFreq, stepDur * 2.6, 0.20, ((st % 4) - 1.5) * 0.18, 4.0, 0.18, 0.045);
-        }
-      }
-
-      // Encode Stereo 16-bit PCM WAV Header + Samples
-      var wavBytes = new ArrayBuffer(44 + numSamples * 4);
-      var view = new DataView(wavBytes);
-      function writeStr(off, s) {
-        for (var k = 0; k < s.length; k++) view.setUint8(off + k, s.charCodeAt(k));
-      }
-      writeStr(0, 'RIFF');
-      view.setUint32(4, 36 + numSamples * 4, true);
-      writeStr(8, 'WAVE');
-      writeStr(12, 'fmt ');
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
-      view.setUint16(22, 2, true);
-      view.setUint32(24, sr, true);
-      view.setUint32(28, sr * 4, true);
-      view.setUint16(32, 4, true);
-      view.setUint16(34, 16, true);
-      writeStr(36, 'data');
-      view.setUint32(40, numSamples * 4, true);
-
-      var offset = 44;
-      for (var n = 0; n < numSamples; n++) {
-        var sL = Math.max(-0.95, Math.min(0.95, left[n]));
-        var sR = Math.max(-0.95, Math.min(0.95, right[n]));
-        view.setInt16(offset, sL * 32767, true);
-        view.setInt16(offset + 2, sR * 32767, true);
-        offset += 4;
-      }
-
-      var blob = new Blob([wavBytes], { type: 'audio/wav' });
-      var url = URL.createObjectURL(blob);
-      var audioEl = document.createElement('audio');
-      audioEl.src = url;
-      audioEl.loop = true;
-      audioEl.autoplay = true;
-      audioEl.playsInline = true;
-      audioEl.setAttribute('playsinline', '');
-      audioEl.setAttribute('autoplay', '');
-      audioEl.volume = 0.85;
-      bgmFallbackEl = audioEl;
-
-      if (!audioCtx || audioCtx.state !== 'running') {
-        var playPromise = audioEl.play();
+      bgmFallbackEl.volume = 0.88;
+      if (bgmFallbackEl.muted) bgmFallbackEl.muted = false;
+      if (bgmFallbackEl.paused) {
+        var playPromise = bgmFallbackEl.play();
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch(function () {});
         }
@@ -1757,11 +1669,8 @@
           stopHtml5FallbackBgm();
         }
       }
-      // Also trigger HTML5 fallback audio if WebAudio is still held suspended by the browser
-      if (bgmFallbackEl && !audioMuted && (!ctx || ctx.state !== 'running') && bgmFallbackEl.paused) {
-        var fp = bgmFallbackEl.play();
-        if (fp && typeof fp.catch === 'function') fp.catch(function () {});
-      }
+      // Also trigger HTML5 studio-mastered BGM audio immediately on unlock
+      startImmediateHtml5AudioAutoplay();
     } catch (_) {}
   }
 
@@ -1977,40 +1886,40 @@
 
   function updateAdaptiveSpyMusic(dt) {
     if (audioMuted) {
+      window.__bgmUserMuted = true;
       stopHtml5FallbackBgm();
       return;
     }
+    window.__bgmUserMuted = false;
     if (!bgmFallbackEl) {
+      bgmFallbackEl = document.getElementById('bgm-autoplay-el');
       startImmediateHtml5AudioAutoplay();
     }
+    var html5BgmActive = Boolean(
+      bgmFallbackEl && !bgmFallbackEl.paused && !bgmFallbackEl.muted && bgmFallbackEl.volume > 0.05
+    );
     // Always ensure the AudioContext exists (even on the Title Screen before any click!)
     var ctx = audioCtx || ensureAudioGraph();
-    if (!ctx) return;
-    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+    if (!html5BgmActive) {
       audioResumeRetryTimer += dt;
-      if (audioResumeRetryTimer >= 0.30) {
+      if (audioResumeRetryTimer >= 0.25) {
         audioResumeRetryTimer = 0.0;
-        try {
-          var rp = ctx.resume();
-          if (rp && typeof rp.then === 'function') {
-            rp.then(function () {
-              audioHardwareUnlocked = true;
-              stopHtml5FallbackBgm();
-            }).catch(function () {});
-          }
-        } catch (_) {}
-        if (bgmFallbackEl && bgmFallbackEl.paused) {
+        startImmediateHtml5AudioAutoplay();
+        if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
           try {
-            bgmFallbackEl.volume = 0.85;
-            var fp = bgmFallbackEl.play();
-            if (fp && typeof fp.catch === 'function') fp.catch(function () {});
+            var rp = ctx.resume();
+            if (rp && typeof rp.then === 'function') {
+              rp.then(function () {
+                audioHardwareUnlocked = true;
+              }).catch(function () {});
+            }
           } catch (_) {}
         }
       }
+    }
+    if (!ctx || ctx.state === 'suspended' || ctx.state === 'interrupted') {
       return;
     }
-    // As soon as AudioContext is running, silence the HTML5 fallback stream so there are NEVER two songs playing!
-    stopHtml5FallbackBgm();
     if (!musicFilterNode || !musicBusGain) return;
 
     // 1. Soft Acoustic Breath Purr (Filtered warm noise only — zero sawtooth oscillator so it NEVER clashes with the music!)
@@ -2023,6 +1932,14 @@
           playNoiseBurst(ctx, ambienceBusGain, ctx.currentTime, 0.32, 'lowpass', 195, 1.4, 0.045, catRig ? catRig.position.x : 0.0);
         } catch (_) {}
       }
+    }
+
+    // If the studio-mastered stereo WAV (<audio id="bgm-autoplay-el">) is actively playing unmuted,
+    // let it play continuously! This guarantees:
+    //   1. Instant t=0ms music on load and permanent Chromium Media Engagement Index (MEI > 7s DOM <audio>) registration.
+    //   2. Zero chance of two background tracks overlapping!
+    if (bgmFallbackEl && !bgmFallbackEl.paused && !bgmFallbackEl.muted && bgmFallbackEl.volume > 0.05) {
+      return;
     }
 
     // 2. Smooth Dynamic Expression (Maintains ONE unified tempo & key at all times!)
@@ -2102,18 +2019,21 @@
   function toggleAudioMute() {
     var wasAudiblyPlaying =
       !audioMuted &&
-      ((audioCtx && audioCtx.state === 'running' && audioHardwareUnlocked) ||
-        (bgmFallbackEl && !bgmFallbackEl.paused && bgmFallbackEl.volume > 0.01));
-    unlockAndResumeAudio();
+      ((bgmFallbackEl && !bgmFallbackEl.paused && !bgmFallbackEl.muted && bgmFallbackEl.volume > 0.05) ||
+        (audioCtx && audioCtx.state === 'running' && audioHardwareUnlocked));
     if (!wasAudiblyPlaying && !audioMuted) {
       // If the browser had held audio suspended at startup, the VERY FIRST press on SOUND turns audio ON (never mutes it)!
       audioMuted = false;
     } else {
       audioMuted = !audioMuted;
     }
+    window.__bgmUserMuted = audioMuted;
     audioBtnDepress = 1.0;
     if (audioMuted) {
       stopHtml5FallbackBgm();
+    } else {
+      unlockAndResumeAudio();
+      startImmediateHtml5AudioAutoplay();
     }
     if (masterBusGain && audioCtx) {
       masterBusGain.gain.setValueAtTime(audioMuted ? 0.0 : dbToLinear(-0.4), audioCtx.currentTime);
@@ -2781,7 +2701,15 @@
         totalCatSabotagesFoiled++;
         playGameSound('boop');
         playGameSound('meow');
-        applyBombClickDrain(6.0, 0, 0.11, 0.06, 2, tr('NUDGED CATONE!', '¡DESPERTASTE A CATONE!'), false);
+        spawnClickPopup3D(
+          tr('NUDGED CATONE!', '¡DESPERTASTE A CATONE!'),
+          tr('BOARD CLEARED', 'TABLERO DESPEJADO'),
+          '#34d399',
+          0,
+          0.11,
+          0.06,
+          true
+        );
         return;
       }
       playGameSound('meow');
@@ -2822,8 +2750,17 @@
       playGameSound('boop');
       playGameSound('meow');
     } else {
-      applyBombClickDrain(5.5, 0, 0.09, -0.18, 2, tr('MEOW!', '¡MIAU!'), false);
+      // Petting Catone while he is peaceful/idle only triggers a cute meow (zero free coins or bomb drain!)
       playGameSound('boop');
+      spawnClickPopup3D(
+        tr('MEOW! ~', '¡MIAU! ~'),
+        tr('WAIT FOR SABOTAGE!', '¡SOLO AL SABOTEAR!'),
+        '#f472b6',
+        0,
+        0.09,
+        -0.18,
+        false
+      );
     }
     updateDomCounters();
   }

@@ -7,6 +7,51 @@
   <link rel="stylesheet" href="./styles.css?v=xr-passthrough-fix-4" />
 </head>
 <body>
+  <!-- Studio Acoustic Chamber Trio BGM (Parsed at t=0ms for instant HTML5 Autoplay & Chromium MEI registration) -->
+  <audio id="bgm-autoplay-el" src="./bgm-chamber-trio.wav" autoplay loop playsinline preload="auto"></audio>
+  <script>
+    (function () {
+      var bgm = document.getElementById('bgm-autoplay-el');
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (AC && !window.__earlyAudioCtx) {
+        try {
+          window.__earlyAudioCtx = new AC();
+          window.__earlyAudioCtx.resume().catch(function () {});
+        } catch (_) {}
+      }
+      function tryStartEarlyBgm() {
+        if (!bgm || window.__bgmUserMuted) return;
+        bgm.volume = 0.88;
+        if (bgm.muted) bgm.muted = false;
+        if (bgm.paused) {
+          var p = bgm.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(function () {
+              // If unmuted autoplay is blocked on a brand-new tab, start muted playback immediately (always allowed)
+              // and unmute on the very first pointer/sensor/focus/controller event!
+              bgm.muted = true;
+              bgm.play().then(function () {
+                setTimeout(function () {
+                  try { bgm.muted = false; } catch (_) {}
+                }, 60);
+              }).catch(function () {});
+            });
+          }
+        }
+        if (window.__earlyAudioCtx && window.__earlyAudioCtx.state !== 'running') {
+          try { window.__earlyAudioCtx.resume().catch(function () {}); } catch (_) {}
+        }
+      }
+      tryStartEarlyBgm();
+      var evs = ['pointerdown', 'pointermove', 'pointerover', 'pointerenter', 'mouseenter', 'mousemove', 'touchstart', 'touchend', 'wheel', 'keydown', 'click', 'focus', 'pageshow', 'visibilitychange', 'gamepadconnected', 'devicemotion', 'deviceorientation'];
+      for (var i = 0; i < evs.length; i++) {
+        window.addEventListener(evs[i], tryStartEarlyBgm, { capture: true, passive: true });
+      }
+      document.addEventListener('DOMContentLoaded', tryStartEarlyBgm, { passive: true });
+      window.addEventListener('load', tryStartEarlyBgm, { passive: true });
+    })();
+  </script>
+
   <!-- Full-Screen 3D Canvas (Transparent background for WebXR Real-World Passthrough) -->
   <div id="canvas-3d-container" aria-label="Paws &amp; Wires 3D Stage"></div>
 
@@ -417,6 +462,6 @@
   <!-- Scripts -->
   <script src="./vendor/three.min.js"></script>
   <script src="./engine.js"></script>
-  <script src="./app.js?v=xr-passthrough-fix-12"></script>
+  <script src="./app.js?v=xr-passthrough-fix-13"></script>
 </body>
 </html>

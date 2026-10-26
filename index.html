@@ -7,11 +7,103 @@
   <link rel="stylesheet" href="./styles.css?v=xr-passthrough-fix-4" />
 </head>
 <body>
-  <!-- Studio Acoustic Chamber Trio BGM (Parsed at t=0ms for instant HTML5 Autoplay & Chromium MEI registration) -->
-  <audio id="bgm-autoplay-el" src="./bgm-chamber-trio.wav" autoplay loop playsinline preload="auto"></audio>
+  <!-- Studio Acoustic Chamber Trio BGM (Synthesized synchronously in memory at t=0ms for 0ms latency HTML5 Autoplay) -->
+  <audio id="bgm-autoplay-el" autoplay loop playsinline preload="auto"></audio>
   <script>
     (function () {
       var bgm = document.getElementById('bgm-autoplay-el');
+      var playInFlight = false;
+      try {
+        var sr = 22050;
+        var stepDur = 0.285;
+        var totalSteps = 32;
+        var numSamples = Math.floor(sr * totalSteps * stepDur);
+        var left = new Float32Array(numSamples);
+        var right = new Float32Array(numSamples);
+        var chords = [
+          [196.00, 246.94, 293.66, 369.99],
+          [196.00, 261.63, 329.63, 392.00],
+          [185.00, 261.63, 293.66, 369.99],
+          [196.00, 246.94, 293.66, 329.63]
+        ];
+        var bass = [
+          82.41, 0, 0, 123.47, 82.41, 0, 98.00, 0,
+          110.00, 0, 0, 82.41, 110.00, 0, 123.47, 0,
+          73.42, 0, 0, 110.00, 73.42, 0, 92.50, 0,
+          98.00, 0, 0, 110.00, 123.47, 0, 92.50, 0
+        ];
+        var melody = [
+          493.88, 0, 392.00, 0, 369.99, 0, 329.63, 0,
+          329.63, 0, 392.00, 0, 493.88, 0, 0, 0,
+          440.00, 0, 369.99, 0, 293.66, 0, 0, 0,
+          392.00, 0, 369.99, 0, 329.63, 0, 0, 0
+        ];
+        function addNote(startSec, freqHz, durSec, amp, pan, modeRatio, modeAmp, modeDur) {
+          var s0 = Math.max(0, Math.floor(startSec * sr));
+          var len = Math.floor(durSec * sr);
+          var lGain = Math.cos(((pan + 1) * 0.25) * Math.PI);
+          var rGain = Math.sin(((pan + 1) * 0.25) * Math.PI);
+          var twoPiF = 2.0 * Math.PI * freqHz / sr;
+          var twoPiM = 2.0 * Math.PI * (freqHz * modeRatio) / sr;
+          for (var i = 0; i < len; i++) {
+            var idx = (s0 + i) % numSamples;
+            var t = i / sr;
+            var att = t < 0.012 ? t / 0.012 : 1.0;
+            var env1 = att * Math.exp(-t / (durSec * 0.34));
+            var env2 = att * Math.exp(-t / modeDur);
+            var sample = (Math.sin(i * twoPiF) * env1 + Math.sin(i * twoPiM) * modeAmp * env2) * amp;
+            left[idx] += sample * lGain;
+            right[idx] += sample * rGain;
+          }
+        }
+        for (var st = 0; st < totalSteps; st++) {
+          var barIdx = Math.floor(st / 8) % chords.length;
+          var barStep = st % 8;
+          var tStep = st * stepDur + (st % 2 === 1 ? 0.018 : 0.0);
+          if (bass[st] > 0) addNote(tStep, bass[st], stepDur * 2.4, 0.28, -0.14, 2.0, 0.65, stepDur * 0.85);
+          var chNotes = chords[barIdx];
+          if (barStep === 0 || barStep === 3) {
+            var cDur = barStep === 0 ? stepDur * 4.2 : stepDur * 2.8;
+            var cAmp = barStep === 0 ? 0.13 : 0.10;
+            for (var c = 0; c < chNotes.length; c++) {
+              addNote(tStep + c * 0.007, chNotes[c], cDur, cAmp, (c - 1.5) * 0.20, 2.0, 0.24, cDur * 0.28);
+            }
+          }
+          if (melody[st] > 0) addNote(tStep, melody[st], stepDur * 2.6, 0.22, ((st % 4) - 1.5) * 0.18, 4.0, 0.18, 0.045);
+        }
+        var wavBytes = new ArrayBuffer(44 + numSamples * 4);
+        var view = new DataView(wavBytes);
+        function writeStr(off, s) {
+          for (var k = 0; k < s.length; k++) view.setUint8(off + k, s.charCodeAt(k));
+        }
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + numSamples * 4, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 2, true);
+        view.setUint32(24, sr, true);
+        view.setUint32(28, sr * 4, true);
+        view.setUint16(32, 4, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, 'data');
+        view.setUint32(40, numSamples * 4, true);
+        var offset = 44;
+        for (var n = 0; n < numSamples; n++) {
+          var sL = Math.max(-0.95, Math.min(0.95, left[n]));
+          var sR = Math.max(-0.95, Math.min(0.95, right[n]));
+          view.setInt16(offset, sL * 32767, true);
+          view.setInt16(offset + 2, sR * 32767, true);
+          offset += 4;
+        }
+        var blob = new Blob([wavBytes], { type: 'audio/wav' });
+        bgm.src = URL.createObjectURL(blob);
+        bgm.volume = 0.88;
+      } catch (_) {
+        if (bgm) bgm.src = './bgm-chamber-trio.wav';
+      }
+
       var AC = window.AudioContext || window.webkitAudioContext;
       if (AC && !window.__earlyAudioCtx) {
         try {
@@ -19,31 +111,28 @@
           window.__earlyAudioCtx.resume().catch(function () {});
         } catch (_) {}
       }
+
       function tryStartEarlyBgm() {
-        if (!bgm || window.__bgmUserMuted) return;
-        bgm.volume = 0.88;
-        if (bgm.muted) bgm.muted = false;
-        if (bgm.paused) {
-          var p = bgm.play();
-          if (p && typeof p.catch === 'function') {
-            p.catch(function () {
-              // If unmuted autoplay is blocked on a brand-new tab, start muted playback immediately (always allowed)
-              // and unmute on the very first pointer/sensor/focus/controller event!
-              bgm.muted = true;
-              bgm.play().then(function () {
-                setTimeout(function () {
-                  try { bgm.muted = false; } catch (_) {}
-                }, 60);
-              }).catch(function () {});
-            });
-          }
-        }
+        if (window.__bgmUserMuted || window.__bgmHandedOffToWebAudio) return;
         if (window.__earlyAudioCtx && window.__earlyAudioCtx.state !== 'running') {
           try { window.__earlyAudioCtx.resume().catch(function () {}); } catch (_) {}
         }
+        if (!bgm || playInFlight || !bgm.paused) return;
+        bgm.volume = 0.88;
+        playInFlight = true;
+        try {
+          var p = bgm.play();
+          if (p && typeof p.then === 'function') {
+            p.then(function () { playInFlight = false; }).catch(function () { playInFlight = false; });
+          } else {
+            playInFlight = false;
+          }
+        } catch (_) {
+          playInFlight = false;
+        }
       }
       tryStartEarlyBgm();
-      var evs = ['pointerdown', 'pointermove', 'pointerover', 'pointerenter', 'mouseenter', 'mousemove', 'touchstart', 'touchend', 'wheel', 'keydown', 'click', 'focus', 'pageshow', 'visibilitychange', 'gamepadconnected', 'devicemotion', 'deviceorientation'];
+      var evs = ['pointerdown', 'mousedown', 'touchstart', 'touchend', 'keydown', 'click', 'focus', 'pageshow', 'visibilitychange', 'gamepadconnected'];
       for (var i = 0; i < evs.length; i++) {
         window.addEventListener(evs[i], tryStartEarlyBgm, { capture: true, passive: true });
       }
@@ -462,6 +551,6 @@
   <!-- Scripts -->
   <script src="./vendor/three.min.js"></script>
   <script src="./engine.js"></script>
-  <script src="./app.js?v=xr-passthrough-fix-13"></script>
+  <script src="./app.js?v=xr-passthrough-fix-14"></script>
 </body>
 </html>

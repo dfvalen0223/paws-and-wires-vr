@@ -1614,31 +1614,45 @@
   }
 
   var bgmFallbackEl = null;
+  var bgmFallbackPlayInFlight = false;
 
   function stopHtml5FallbackBgm() {
     if (!bgmFallbackEl) bgmFallbackEl = document.getElementById('bgm-autoplay-el');
     if (!bgmFallbackEl) return;
     try {
-      if (audioMuted) {
-        bgmFallbackEl.volume = 0.0;
-        if (!bgmFallbackEl.paused) bgmFallbackEl.pause();
-      }
+      window.__bgmHandedOffToWebAudio = true;
+      bgmFallbackEl.volume = 0.0;
+      if (!bgmFallbackEl.paused) bgmFallbackEl.pause();
     } catch (_) {}
   }
 
   function startImmediateHtml5AudioAutoplay() {
     if (!bgmFallbackEl) bgmFallbackEl = document.getElementById('bgm-autoplay-el');
     if (audioMuted || !bgmFallbackEl) return;
+    if (audioCtx && audioCtx.state === 'running') {
+      stopHtml5FallbackBgm();
+      return;
+    }
+    if (bgmFallbackPlayInFlight || !bgmFallbackEl.paused) return;
     try {
+      window.__bgmHandedOffToWebAudio = false;
       bgmFallbackEl.volume = 0.88;
-      if (bgmFallbackEl.muted) bgmFallbackEl.muted = false;
-      if (bgmFallbackEl.paused) {
-        var playPromise = bgmFallbackEl.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch(function () {});
-        }
+      bgmFallbackPlayInFlight = true;
+      var playPromise = bgmFallbackEl.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise
+          .then(function () {
+            bgmFallbackPlayInFlight = false;
+          })
+          .catch(function () {
+            bgmFallbackPlayInFlight = false;
+          });
+      } else {
+        bgmFallbackPlayInFlight = false;
       }
-    } catch (_) {}
+    } catch (_) {
+      bgmFallbackPlayInFlight = false;
+    }
   }
 
   function unlockAndResumeAudio() {
@@ -1651,6 +1665,7 @@
           p.then(function () {
             audioHardwareUnlocked = true;
             stopHtml5FallbackBgm();
+            if (musicStepAccum < 0.25) musicStepAccum = 0.285;
           }).catch(function () {});
         }
       } else if (ctx.state === 'running') {
@@ -1667,10 +1682,13 @@
         if (ctx.state === 'running') {
           audioHardwareUnlocked = true;
           stopHtml5FallbackBgm();
+          if (musicStepAccum < 0.25) musicStepAccum = 0.285;
         }
       }
-      // Also trigger HTML5 studio-mastered BGM audio immediately on unlock
-      startImmediateHtml5AudioAutoplay();
+      // If WebAudio is still held suspended, trigger the t=0ms in-memory HTML5 WAV
+      if (!ctx || ctx.state !== 'running') {
+        startImmediateHtml5AudioAutoplay();
+      }
     } catch (_) {}
   }
 
@@ -1895,31 +1913,29 @@
       bgmFallbackEl = document.getElementById('bgm-autoplay-el');
       startImmediateHtml5AudioAutoplay();
     }
-    var html5BgmActive = Boolean(
-      bgmFallbackEl && !bgmFallbackEl.paused && !bgmFallbackEl.muted && bgmFallbackEl.volume > 0.05
-    );
     // Always ensure the AudioContext exists (even on the Title Screen before any click!)
     var ctx = audioCtx || ensureAudioGraph();
-    if (!html5BgmActive) {
+    if (!ctx) return;
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
       audioResumeRetryTimer += dt;
       if (audioResumeRetryTimer >= 0.25) {
         audioResumeRetryTimer = 0.0;
         startImmediateHtml5AudioAutoplay();
-        if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
-          try {
-            var rp = ctx.resume();
-            if (rp && typeof rp.then === 'function') {
-              rp.then(function () {
-                audioHardwareUnlocked = true;
-              }).catch(function () {});
-            }
-          } catch (_) {}
-        }
+        try {
+          var rp = ctx.resume();
+          if (rp && typeof rp.then === 'function') {
+            rp.then(function () {
+              audioHardwareUnlocked = true;
+              stopHtml5FallbackBgm();
+              if (musicStepAccum < 0.25) musicStepAccum = 0.285;
+            }).catch(function () {});
+          }
+        } catch (_) {}
       }
-    }
-    if (!ctx || ctx.state === 'suspended' || ctx.state === 'interrupted') {
       return;
     }
+    // As soon as AudioContext is running, hand off cleanly from HTML5 <audio> to the live WebAudio Chamber Trio!
+    stopHtml5FallbackBgm();
     if (!musicFilterNode || !musicBusGain) return;
 
     // 1. Soft Acoustic Breath Purr (Filtered warm noise only — zero sawtooth oscillator so it NEVER clashes with the music!)
@@ -1932,14 +1948,6 @@
           playNoiseBurst(ctx, ambienceBusGain, ctx.currentTime, 0.32, 'lowpass', 195, 1.4, 0.045, catRig ? catRig.position.x : 0.0);
         } catch (_) {}
       }
-    }
-
-    // If the studio-mastered stereo WAV (<audio id="bgm-autoplay-el">) is actively playing unmuted,
-    // let it play continuously! This guarantees:
-    //   1. Instant t=0ms music on load and permanent Chromium Media Engagement Index (MEI > 7s DOM <audio>) registration.
-    //   2. Zero chance of two background tracks overlapping!
-    if (bgmFallbackEl && !bgmFallbackEl.paused && !bgmFallbackEl.muted && bgmFallbackEl.volume > 0.05) {
-      return;
     }
 
     // 2. Smooth Dynamic Expression (Maintains ONE unified tempo & key at all times!)
@@ -7270,6 +7278,7 @@
     var domElement = renderer.domElement;
 
     domElement.addEventListener('pointerdown', function (ev) {
+      unlockAndResumeAudio();
       if (!camera || !scene) return;
       var rect = domElement.getBoundingClientRect();
       var ndcX = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
@@ -8999,20 +9008,17 @@
     var unlockEvents = [
       'pointerdown',
       'pointerup',
-      'pointermove',
-      'pointerover',
-      'mousemove',
+      'mousedown',
+      'mouseup',
       'touchstart',
       'touchend',
-      'touchmove',
-      'wheel',
       'click',
       'keydown',
       'focus',
       'pageshow'
     ];
     for (var ue = 0; ue < unlockEvents.length; ue++) {
-      window.addEventListener(unlockEvents[ue], unlockAndResumeAudio, { passive: true });
+      window.addEventListener(unlockEvents[ue], unlockAndResumeAudio, { capture: true, passive: true });
     }
     document.addEventListener('visibilitychange', unlockAndResumeAudio, { passive: true });
 
@@ -9217,16 +9223,23 @@
       renderer.xr.setReferenceSpaceType('local-floor');
       try {
         var setSessPromise = renderer.xr.setSession(xrSession);
-        if (setSessPromise && typeof setSessPromise.catch === 'function') {
-          setSessPromise.catch(function (errSet) {
-            console.warn('[BombCat] setSession error:', errSet);
-            onXrSessionEnded();
-          });
+        if (setSessPromise && typeof setSessPromise.then === 'function') {
+          setSessPromise
+            .then(function () {
+              unlockAndResumeAudio();
+              setTimeout(unlockAndResumeAudio, 150);
+              setTimeout(unlockAndResumeAudio, 450);
+            })
+            .catch(function (errSet) {
+              console.warn('[BombCat] setSession error:', errSet);
+              onXrSessionEnded();
+            });
         }
       } catch (errSync) {
         console.warn('[BombCat] setSession sync error:', errSync);
       }
       xrSession.addEventListener('end', onXrSessionEnded);
+      xrSession.addEventListener('visibilitychange', unlockAndResumeAudio);
       // Unlock Web Audio on any XR controller/hand input event inside the headset session!
       xrSession.addEventListener('selectstart', unlockAndResumeAudio);
       xrSession.addEventListener('select', unlockAndResumeAudio);
@@ -9234,12 +9247,8 @@
       xrSession.addEventListener('inputsourceschange', unlockAndResumeAudio);
       unlockAndResumeAudio();
       if (btnEnterXr) btnEnterXr.textContent = 'EXIT';
-      if (inTitleScreenMode) {
-        startGameFromTitleScreen();
-      } else {
-        updateXrEntryBannerVisibility();
-        updateDomCounters();
-      }
+      updateXrEntryBannerVisibility();
+      updateDomCounters();
     }
 
     function launchXrHeadsetSession(quietFail) {
